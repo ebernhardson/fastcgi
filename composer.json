@@ -1,0 +1,25 @@
+{
+    "name": "ebernhardson/fastcgi",
+    "description": "FastCGI Client implementation for PHP",
+    "keywords": ["fastcgi", "fpm", "php-fpm"],
+    "homepage": "http://www.github.com/ebernhardson/fastcgi/",
+    "authors": [
+        {
+            "name": "Pierrick Charron",
+            "email": "pierrick@webstart.fr"
+        },
+        {
+            "name": "Daniel Aharon",
+            "email": "dan@danielaharon.com"
+        },
+        {
+            "name": "Erik Bernhardson",
+            "email": "bernhardsonerik@gmail.com"
+        }
+    ],
+    "autoload": {
+        "psr-0": {
+            "EBernhardson\\FastCGI": "lib/"
+        }
+    }
+}
