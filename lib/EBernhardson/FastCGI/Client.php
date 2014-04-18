@@ -427,27 +427,35 @@ class Client
         // Format the header.
         $header = array();
         $headerLines = explode("\n", $rawHeader);
-
+        
+        // Iterate over the headers found in the response.
         foreach ($headerLines as $line) {
+            
+            // Extract the header data.
             if (preg_match('/([\w-]+):\s*(.*)$/', $line, $matches)) {
-                // ['Content-type'] => 'text/plain'
-                $header[strtolower($matches[1])] = trim($matches[2]);
+
+                // Initialize header name/value.
+                $headerName = strtolower($matches[1]);
+                $headerValue = trim($matches[2]);
+                
+                // If we found an status header (will only be available if not have a 200).
+                if ($headerName == 'status') {
+                    
+                    // Initialize the status header and the code.
+                    $headerStatus = array($headerName => $headerValue);
+                    $code = $headerValue;
+                    if (false !== ($pos = strpos($code, ' '))) {
+                        $code = substr($code, 0, $pos);
+                    }
+                    
+                } else {
+                    $header[] = array($headerName => $headerValue);
+                }
             }
         }
-        if (isset($header['status'])) {
-            $code = $header['status'];
-            if (false !== ($pos = strpos($code, ' '))) {
-                $code = substr($code, 0, $pos);
-            }
-        } else {
-            if (isset($header['location'])) {
-                $header['status'] = '302 Moved Temporarily';
-                $code = '302';
-            }  else {
-                $header['status'] = '200 OK';
-                $code = '200';
-            }
-        }
+        
+        // prepend the status header
+        array_unshift($header, $headerStatus);
 
         if (false === ctype_digit($code)) {
             throw new CommunicationException("Unrecognizable status code returned from fastcgi: $code");

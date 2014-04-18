@@ -1,3 +1,5 @@
 .*.swp
 .*.swo
+.project
+.settings
 vendor
