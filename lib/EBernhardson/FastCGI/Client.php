@@ -428,6 +428,10 @@ class Client
         $header = array();
         $headerLines = explode("\n", $rawHeader);
         
+        // Initialize the status code and the status header
+        $code = '200';
+        $headerStatus = array('status' => '200 OK');
+        
         // Iterate over the headers found in the response.
         foreach ($headerLines as $line) {
             
