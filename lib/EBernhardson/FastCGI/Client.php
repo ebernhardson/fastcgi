@@ -430,7 +430,7 @@ class Client
         
         // Initialize the status code and the status header
         $code = '200';
-        $headerStatus = array('status' => '200 OK');
+        $headerStatus = '200 OK';
         
         // Iterate over the headers found in the response.
         foreach ($headerLines as $line) {
@@ -446,20 +446,33 @@ class Client
                 if ($headerName == 'status') {
                     
                     // Initialize the status header and the code.
-                    $headerStatus = array($headerName => $headerValue);
+                    $headerStatus = $headerValue;
                     $code = $headerValue;
                     if (false !== ($pos = strpos($code, ' '))) {
                         $code = substr($code, 0, $pos);
                     }
+                }
+                
+                // We need to know if this header is already availble
+                if (array_key_exists($headerName, $header)) {
+
+                    // Check if the value is an array already
+                    if (is_array($header[$headerName])) {
+                        // Simply append the next header value
+                        $header[$headerName][] = $headerValue;
+                    } else {
+                        // Convert the existing value into an array and append the new header value
+                        $header[$headerName] = array($header[$headerName], $headerValue);
+                    }
                     
                 } else {
-                    $header[] = array($headerName => $headerValue);
+                    $header[$headerName] = $headerValue;
                 }
             }
         }
         
-        // prepend the status header
-        array_unshift($header, $headerStatus);
+        // Set the status header finally
+        $header['status'] = $headerStatus;
 
         if (false === ctype_digit($code)) {
             throw new CommunicationException("Unrecognizable status code returned from fastcgi: $code");
