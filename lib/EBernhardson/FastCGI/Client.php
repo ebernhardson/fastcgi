@@ -60,37 +60,37 @@ class Client
      * Socket
      * @var Resource
      */
-    private $sock = null;
+    protected $sock = null;
 
     /**
      * Host
      * @var String
      */
-    private $host = null;
+    protected $host = null;
 
     /**
      * Port
      * @var Integer
      */
-    private $port = null;
+    protected $port = null;
 
     /**
      * Unix socket path
      * @var string
      */
-    private $socketPath = null;
+    protected $socketPath = null;
 
     /**
      * Keep Alive
      * @var Boolean
      */
-    private $keepAlive = false;
+    protected $keepAlive = false;
 
     /**
      * A request has been sent.
      * @var Boolean
      */
-    private $awaitingResponse = false;
+    protected $awaitingResponse = false;
 
     /**
      * Constructor
