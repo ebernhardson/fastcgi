@@ -515,7 +515,7 @@ class Client
             $resp = $this->readPacket();
 
             // Check for the end of the response.
-            if ($resp['type'] == self::END_REQUEST) {
+            if ($resp['type'] == self::END_REQUEST || $resp['type'] == 0) {
                 $this->awaitingResponse = false;
             // Check for response content.
             } elseif ($resp['type'] == self::STDOUT) {
