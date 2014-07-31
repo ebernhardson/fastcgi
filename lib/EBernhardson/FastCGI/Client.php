@@ -60,37 +60,37 @@ class Client
      * Socket
      * @var Resource
      */
-    private $sock = null;
+    protected $sock = null;
 
     /**
      * Host
      * @var String
      */
-    private $host = null;
+    protected $host = null;
 
     /**
      * Port
      * @var Integer
      */
-    private $port = null;
+    protected $port = null;
 
     /**
      * Unix socket path
      * @var string
      */
-    private $socketPath = null;
+    protected $socketPath = null;
 
     /**
      * Keep Alive
      * @var Boolean
      */
-    private $keepAlive = false;
+    protected $keepAlive = false;
 
     /**
      * A request has been sent.
      * @var Boolean
      */
-    private $awaitingResponse = false;
+    protected $awaitingResponse = false;
 
     /**
      * Constructor
@@ -156,7 +156,7 @@ class Client
     /**
      * Create a connection to the FastCGI application
      */
-    private function connect()
+    protected function connect()
     {
         if (!$this->sock) {
             if($this->socketPath !== null) {
@@ -184,7 +184,7 @@ class Client
      * @param String $content Content of the packet
      * @param Integer $requestId RequestId
      */
-    private function buildPacket($type, $content, $requestId = 1)
+    protected function buildPacket($type, $content, $requestId = 1)
     {
         $clen = strlen($content);
         return chr(self::VERSION_1)         /* version */
@@ -205,7 +205,7 @@ class Client
      * @param String $value Value
      * @return String FastCGI Name value pair
      */
-    private function buildNvpair($name, $value)
+    protected function buildNvpair($name, $value)
     {
         $nlen = strlen($name);
         $vlen = strlen($value);
@@ -233,7 +233,7 @@ class Client
      * @param String $data Data containing the set of FastCGI NVPair
      * @return array of NVPair
      */
-    private function readNvpair($data, $length = null)
+    protected function readNvpair($data, $length = null)
     {
         $array = array();
 
@@ -272,7 +272,7 @@ class Client
      * @param String $data String containing all the packet
      * @return array
      */
-    private function decodePacketHeader($data)
+    protected function decodePacketHeader($data)
     {
         $ret = array();
         $ret['version']       = ord($data{0});
@@ -289,7 +289,7 @@ class Client
      *
      * @return array
      */
-    private function readPacket()
+    protected function readPacket()
     {
         $packet = @socket_read($this->sock, self::HEADER_LEN);
         if ($packet === false) {
@@ -427,27 +427,52 @@ class Client
         // Format the header.
         $header = array();
         $headerLines = explode("\n", $rawHeader);
-
+        
+        // Initialize the status code and the status header
+        $code = '200';
+        $headerStatus = '200 OK';
+        
+        // Iterate over the headers found in the response.
         foreach ($headerLines as $line) {
+            
+            // Extract the header data.
             if (preg_match('/([\w-]+):\s*(.*)$/', $line, $matches)) {
-                // ['Content-type'] => 'text/plain'
-                $header[strtolower($matches[1])] = trim($matches[2]);
+
+                // Initialize header name/value.
+                $headerName = strtolower($matches[1]);
+                $headerValue = trim($matches[2]);
+                
+                // If we found an status header (will only be available if not have a 200).
+                if ($headerName == 'status') {
+                    
+                    // Initialize the status header and the code.
+                    $headerStatus = $headerValue;
+                    $code = $headerValue;
+                    if (false !== ($pos = strpos($code, ' '))) {
+                        $code = substr($code, 0, $pos);
+                    }
+                }
+                
+                // We need to know if this header is already availble
+                if (array_key_exists($headerName, $header)) {
+
+                    // Check if the value is an array already
+                    if (is_array($header[$headerName])) {
+                        // Simply append the next header value
+                        $header[$headerName][] = $headerValue;
+                    } else {
+                        // Convert the existing value into an array and append the new header value
+                        $header[$headerName] = array($header[$headerName], $headerValue);
+                    }
+                    
+                } else {
+                    $header[$headerName] = $headerValue;
+                }
             }
         }
-        if (isset($header['status'])) {
-            $code = $header['status'];
-            if (false !== ($pos = strpos($code, ' '))) {
-                $code = substr($code, 0, $pos);
-            }
-        } else {
-            if (isset($header['location'])) {
-                $header['status'] = '302 Moved Temporarily';
-                $code = '302';
-            }  else {
-                $header['status'] = '200 OK';
-                $code = '200';
-            }
-        }
+        
+        // Set the status header finally
+        $header['status'] = $headerStatus;
 
         if (false === ctype_digit($code)) {
             throw new CommunicationException("Unrecognizable status code returned from fastcgi: $code");
@@ -490,7 +515,7 @@ class Client
             $resp = $this->readPacket();
 
             // Check for the end of the response.
-            if ($resp['type'] == self::END_REQUEST) {
+            if ($resp['type'] == self::END_REQUEST || $resp['type'] == 0) {
                 $this->awaitingResponse = false;
             // Check for response content.
             } elseif ($resp['type'] == self::STDOUT) {
