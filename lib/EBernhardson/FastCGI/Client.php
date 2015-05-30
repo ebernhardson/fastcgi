@@ -22,12 +22,14 @@ namespace EBernhardson\FastCGI;
  * @author      Pierrick Charron <pierrick@webstart.fr>
  * @author      Daniel Aharon <dan@danielaharon.com>
  * @author      Erik Bernhardson <bernhardsonerik@gmail.com>
- * @version     2.0
+ * @author      Jesse Decker <me@jessedecker.com>
+ * @version     2.1
  */
 class Client
 {
     const VERSION_1            = 1;
 
+    // Packet types
     const BEGIN_REQUEST        = 1;
     const ABORT_REQUEST        = 2;
     const END_REQUEST          = 3;
@@ -39,46 +41,42 @@ class Client
     const GET_VALUES           = 9;
     const GET_VALUES_RESULT    = 10;
     const UNKNOWN_TYPE         = 11;
-    const MAXTYPE              = self::UNKNOWN_TYPE;
+    //const MAXTYPE              = self::UNKNOWN_TYPE;
 
     const RESPONDER            = 1;
     const AUTHORIZER           = 2;
     const FILTER               = 3;
 
+    // Response codes
     const REQUEST_COMPLETE     = 0;
     const CANT_MPX_CONN        = 1;
     const OVERLOADED           = 2;
     const UNKNOWN_ROLE         = 3;
 
-    const MAX_CONNS            = 'MAX_CONNS';
-    const MAX_REQS             = 'MAX_REQS';
-    const MPXS_CONNS           = 'MPXS_CONNS';
+    //const MAX_CONNS            = 'MAX_CONNS';
+    //const MAX_REQS             = 'MAX_REQS';
+    //const MPXS_CONNS           = 'MPXS_CONNS';
 
+    // Number of bytes used in FastCGI header packet
     const HEADER_LEN           = 8;
 
     /**
      * Socket
      * @var Resource
      */
-    protected $sock = null;
+    protected $sock;
 
     /**
      * Host
      * @var String
      */
-    protected $host = null;
+    protected $host;
 
     /**
      * Port
      * @var Integer
      */
-    protected $port = null;
-
-    /**
-     * Unix socket path
-     * @var string
-     */
-    protected $socketPath = null;
+    protected $port;
 
     /**
      * Keep Alive
@@ -87,10 +85,25 @@ class Client
     protected $keepAlive = false;
 
     /**
-     * A request has been sent.
-     * @var Boolean
+     * Outstanding request statuses keyed by request id
+     *
+     * Each request is an array with following form:
+     *
+     *  array(
+     *    'state' => REQ_STATE_*
+     *    'stdout' => null | string
+     *    'stdin' => null | string
+     *  )
+     *
+     * @var Response[]
      */
-    protected $awaitingResponse = false;
+    protected $_requests = array();
+
+    /**
+     * Read/Write timeout in milliseconds
+     * @var Integer
+     */
+    protected $_readWriteTimeout = 0;
 
     /**
      * Constructor
@@ -100,12 +113,8 @@ class Client
      */
     public function __construct($host, $port = null)
     {
-        if ($port !== null) {
-            $this->host = $host;
-            $this->port = $port;
-        } else {
-            $this->socketPath = $host;
-        }
+        $this->host = $host;
+        $this->port = $port;
     }
 
     /**
@@ -113,9 +122,15 @@ class Client
      */
     public function __destruct()
     {
-        if ($this->sock) {
-           socket_close($this->sock);
-        }
+        $this->close();
+    }
+
+    /**
+     * @return array
+     */
+    public function __sleep()
+    {
+        return array('host','port','_readWriteTimeout');
     }
 
     /**
@@ -143,7 +158,7 @@ class Client
     }
 
     /**
-     * Close the fastcgi connection
+     * Close the FastCGI connection
      */
     public function close()
     {
@@ -151,29 +166,73 @@ class Client
             socket_close($this->sock);
             $this->sock = null;
         }
+        $this->_requests = [];
     }
+
+    /**
+     * Set the read/write timeout
+     *
+     * @param Integer  number of milliseconds before read or write call will timeout
+     */
+    public function setReadWriteTimeout($timeoutMs)
+    {
+        $this->_readWriteTimeout = $timeoutMs;
+        $this->set_ms_timeout($this->_readWriteTimeout);
+    }
+
+    /**
+     * Get the read timeout
+     *
+     * @return Integer  number of milliseconds before read will timeout
+     */
+    public function getReadWriteTimeout()
+    {
+        return $this->_readWriteTimeout;
+    }
+
+    /**
+     * Helper to avoid duplicating milliseconds to secs/usecs in a few places
+     *
+     * @param Integer $timeoutMs millisecond timeout
+     * @return Boolean
+     */
+    private function set_ms_timeout($timeoutMs) {
+        if (!$this->sock) {
+            return false;
+        }
+        $timeout = array(
+            'sec' => floor($timeoutMs / 1000),
+            'usec' => ($timeoutMs % 1000) * 1000,
+        );
+        return socket_set_option($this->sock, SOL_SOCKET, SO_RCVTIMEO, $timeout);
+    }
+
 
     /**
      * Create a connection to the FastCGI application
      */
     protected function connect()
     {
+        if ($this->sock) {
+            return;
+        }
+        if (!$this->port) {
+            $this->sock = socket_create(AF_UNIX, SOCK_STREAM, 0);
+            $address = $this->host;
+            $port = 0;
+        } else {
+            $this->sock = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
+            $address = $this->host;
+            $port = $this->port;
+        }
         if (!$this->sock) {
-            if($this->socketPath !== null) {
-                $this->sock = @socket_create(AF_UNIX, SOCK_STREAM, 0);
-                $address = $this->socketPath;
-                $port = 0;
-            } else {
-                $this->sock = @socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
-                $address = $this->host;
-                $port = $this->port;
-            }
-            if (!$this->sock) {
-                throw CommunicationException::socketCreate();
-            }
-            if (false === @socket_connect($this->sock, $address, $port)) {
-                throw CommunicationException::socketConnect($this->sock, $address, $port);
-            }
+            throw CommunicationException::socketCreate();
+        }
+        if (false === socket_connect($this->sock, $address, $port)) {
+            throw CommunicationException::socketConnect($this->sock, $this->host, $this->port);
+        }
+        if ($this->_readWriteTimeout && !$this->set_ms_timeout($this->_readWriteTimeout)) {
+            throw new CommunicationException('Unable to set timeout on socket');
         }
     }
 
@@ -183,19 +242,29 @@ class Client
      * @param Integer $type Type of the packet
      * @param String $content Content of the packet
      * @param Integer $requestId RequestId
+     * @return String
      */
     protected function buildPacket($type, $content, $requestId = 1)
     {
-        $clen = strlen($content);
-        return chr(self::VERSION_1)         /* version */
-            . chr($type)                    /* type */
-            . chr(($requestId >> 8) & 0xFF) /* requestIdB1 */
-            . chr($requestId & 0xFF)        /* requestIdB0 */
-            . chr(($clen >> 8 ) & 0xFF)     /* contentLengthB1 */
-            . chr($clen & 0xFF)             /* contentLengthB0 */
-            . chr(0)                        /* paddingLength */
-            . chr(0)                        /* reserved */
-            . $content;                     /* content */
+        $offset = 0;
+        $totLen = strlen($content);
+        $buf    = '';
+        do {
+            // Packets can be a maximum of 65535 bytes
+            $part = substr($content, $offset, 0xffff - 8);
+            $segLen = strlen($part);
+            $buf .= chr(self::VERSION_1)        /* version */
+                . chr($type)                    /* type */
+                . chr(($requestId >> 8) & 0xFF) /* requestIdB1 */
+                . chr($requestId & 0xFF)        /* requestIdB0 */
+                . chr(($segLen >> 8) & 0xFF)    /* contentLengthB1 */
+                . chr($segLen & 0xFF)           /* contentLengthB0 */
+                . chr(0)                        /* paddingLength */
+                . chr(0)                        /* reserved */
+                . $part;                        /* content */
+            $offset += $segLen;
+        } while ($offset < $totLen);
+        return $buf;
     }
 
     /**
@@ -231,20 +300,18 @@ class Client
      * Read a set of FastCGI Name value pairs
      *
      * @param String $data Data containing the set of FastCGI NVPair
+     * @param Integer $length
      * @return array of NVPair
      */
     protected function readNvpair($data, $length = null)
     {
-        $array = array();
-
         if ($length === null) {
             $length = strlen($data);
         }
 
+        $array = array();
         $p = 0;
-
         while ($p != $length) {
-
             $nlen = ord($data{$p++});
             if ($nlen >= 128) {
                 $nlen = ($nlen & 0x7F << 24);
@@ -287,53 +354,60 @@ class Client
     /**
      * Read a FastCGI Packet
      *
-     * @return array
+     * @param int $timeoutMs
+     * @return array|null
+     * @throws CommunicationException
      */
-    protected function readPacket()
+    protected function readPacket($timeoutMs)
     {
-        $packet = @socket_read($this->sock, self::HEADER_LEN);
+        $s = [$this->sock];
+        $a = [];
+        socket_select($s, $a, $a, floor($timeoutMs / 1000), ($timeoutMs % 1000) * 1000);
+
+        $packet = socket_read($this->sock, self::HEADER_LEN);
         if ($packet === false) {
+            /* Not relevant for socket_create() connections
+            $info = stream_get_meta_data($this->_sock);
+
+            if ($info['timed_out']) {
+                throw new TimedOutException('Read timed out');
+            }
+
+            if ($info['unread_bytes'] == 0
+                && $info['blocked']
+                && $info['eof']) {
+                throw new CommunicationException('Not in white list. Check listen.allowed_clients.');
+            }*/
             throw CommunicationException::socketRead($this->sock);
+        }
+        if (!$packet) {
+            return null;
         }
 
         $resp = $this->decodePacketHeader($packet);
-
-        if ($len = $resp['contentLength'] + $resp['paddingLength']) {
-            $content = @socket_read($this->sock, $len);
-            if ($content === false) {
-                throw CommunicationException::socketRead($this->sock);
+        $resp['content'] = '';
+        if ($resp['contentLength']) {
+            $len  = $resp['contentLength'];
+            while ($len && $buf=socket_read($this->sock, $len)) {
+                $len -= strlen($buf);
+                $resp['content'] .= $buf;
             }
-            $resp['content'] = substr($content, 0, $resp['contentLength']);
-        } else {
-            $resp['content'] = '';
         }
-
+        if ($resp['paddingLength']) {
+            /*$buf = */socket_read($this->sock, $resp['paddingLength']);
+            // throw-away padding...
+        }
         return $resp;
     }
 
     /**
-     * Get Informations on the FastCGI application
+     * Get information on the FastCGI application
      *
      * @param array $requestedInfo information to retrieve
      * @return array
+     * @throws CommunicationException
      */
     public function getValues(array $requestedInfo)
-    {
-        try {
-            return $this->doGetValues($requestedInfo);
-        } catch (CommunicationException $e) {
-            $this->close();
-            throw $e;
-        }
-    }
-
-    /**
-     * Get Informations on the FastCGI application
-     *
-     * @param array $requestedInfo information to retrieve
-     * @return array
-     */
-    protected function doGetValues(array $requestedInfo)
     {
         $this->connect();
 
@@ -341,15 +415,12 @@ class Client
         foreach ($requestedInfo as $info) {
             $request .= $this->buildNvpair($info, '');
         }
-
-        if (false === @socket_write($this->sock, $this->buildPacket(self::GET_VALUES, $request, 0))) {
+        $ret = socket_write($this->sock, $this->buildPacket(self::GET_VALUES, $request, 0));
+        if ($ret === false) {
             throw CommunicationException::socketWrite($this->sock);
         }
 
-        $this->awaitingResponse = true;
-        $resp = $this->readPacket();
-        $this->awaitingResponse = false;
-
+        $resp = $this->readPacket(0);
         if ($resp['type'] == self::GET_VALUES_RESULT) {
             return $this->readNvpair($resp['content'], $resp['length']);
         } else {
@@ -362,204 +433,137 @@ class Client
      *
      * @param array $params Array of parameters
      * @param String $stdin Content
+     * @return String
      */
     public function request(array $params, $stdin)
     {
-        try {
-            $this->doRequest($params, $stdin);
-        } catch (CommunicationException $e) {
-            $this->close();
-            throw $e;
-        }
+        $req = $this->async_request($params, $stdin);
+        return $req->get();
     }
 
     /**
-     * Execute a request to the FastCGI application
+     * Execute a request to the FastCGI application asynchronously
+     * This sends request to application and returns the assigned ID for that request.
+     * You should keep this id for later use with wait_for_response(). Ids are chosen randomly
+     * rather than sequentially to guard against false-positives when using persistent sockets.
+     * In that case it is possible that a delayed response to a request made by a previous script
+     * invocation comes back on this socket and is mistaken for response to request made with same ID
+     * during this request.
      *
-     * @param array $params Array of parameters
-     * @param String $stdin Content
+     * @param array  $params Array of parameters
+     * @param String $stdin  Content
+     * @return Response
+     * @throws CommunicationException
      */
-    protected function doRequest(array $params, $stdin)
+    public function async_request(array $params, $stdin)
     {
         $this->connect();
 
-        $request = $this->buildPacket(self::BEGIN_REQUEST, chr(0) . chr(self::RESPONDER) . chr((int) $this->keepAlive) . str_repeat(chr(0), 5));
+        // Pick random number between 1 and max 16 bit unsigned int 65535
+        do {
+            $id = mt_rand(1, (1 << 16) - 1);
+        } while (isset($this->_requests[$id]));
+
+        $request = $this->buildPacket(self::BEGIN_REQUEST, chr(0) . chr(self::RESPONDER) . chr((int) $this->keepAlive) . str_repeat(chr(0), 5), $id);
 
         $paramsRequest = '';
         foreach ($params as $key => $value) {
-            $paramsRequest .= $this->buildNvpair($key, $value);
+            $paramsRequest .= $this->buildNvpair($key, $value, $id);
         }
         if ($paramsRequest) {
-            $request .= $this->buildPacket(self::PARAMS, $paramsRequest);
+            $request .= $this->buildPacket(self::PARAMS, $paramsRequest, $id);
         }
-        $request .= $this->buildPacket(self::PARAMS, '');
+        $request .= $this->buildPacket(self::PARAMS, '', $id);
 
         if ($stdin) {
-            $request .= $this->buildPacket(self::STDIN, $stdin);
+            $request .= $this->buildPacket(self::STDIN, $stdin, $id);
         }
-        $request .= $this->buildPacket(self::STDIN, '');
+        $request .= $this->buildPacket(self::STDIN, '', $id);
 
-        // Write the request and break.
-        if (false === @socket_write($this->sock, $request)) {
-            throw CommunicationException::socketWrite($this->sock);
-        }
+        if (false === socket_write($this->sock, $request)) {
+            /* Not relevant for socket_create()
+            $info = stream_get_meta_data($this->_sock);
+            if ($info['timed_out']) {
+                throw new TimedOutException('Write timed out');
+            }*/
 
-        $this->awaitingResponse = true;
-    }
-
-    /**
-     * FCGIClient::formatResponse()
-     *
-     * Format the response into an array with separate statusCode, headers, body, and error output.
-     *
-     * @param $stdout The plain, unformatted response.
-     * @param $stderr The plain, unformatted error output.
-     *
-     * @return array An array containing the headers and body content.
-     */
-    private static function formatResponse($stdout, $stderr) {
-
-        // Split the header from the body.  Split on \n\n.
-        $doubleCr = strpos($stdout, "\r\n\r\n");
-        $rawHeader = substr($stdout, 0, $doubleCr);
-        $rawBody = substr($stdout, $doubleCr, strlen($stdout));
-
-        // Format the header.
-        $header = array();
-        $headerLines = explode("\n", $rawHeader);
-        
-        // Initialize the status code and the status header
-        $code = '200';
-        $headerStatus = '200 OK';
-        
-        // Iterate over the headers found in the response.
-        foreach ($headerLines as $line) {
-            
-            // Extract the header data.
-            if (preg_match('/([\w-]+):\s*(.*)$/', $line, $matches)) {
-
-                // Initialize header name/value.
-                $headerName = strtolower($matches[1]);
-                $headerValue = trim($matches[2]);
-                
-                // If we found an status header (will only be available if not have a 200).
-                if ($headerName == 'status') {
-                    
-                    // Initialize the status header and the code.
-                    $headerStatus = $headerValue;
-                    $code = $headerValue;
-                    if (false !== ($pos = strpos($code, ' '))) {
-                        $code = substr($code, 0, $pos);
-                    }
-                }
-                
-                // We need to know if this header is already availble
-                if (array_key_exists($headerName, $header)) {
-
-                    // Check if the value is an array already
-                    if (is_array($header[$headerName])) {
-                        // Simply append the next header value
-                        $header[$headerName][] = $headerValue;
-                    } else {
-                        // Convert the existing value into an array and append the new header value
-                        $header[$headerName] = array($header[$headerName], $headerValue);
-                    }
-                    
-                } else {
-                    $header[$headerName] = $headerValue;
-                }
-            }
-        }
-        
-        // Set the status header finally
-        $header['status'] = $headerStatus;
-
-        if (false === ctype_digit($code)) {
-            throw new CommunicationException("Unrecognizable status code returned from fastcgi: $code");
-        }
-
-        return array(
-            'statusCode' => (int) $code,
-            'headers'    => $header,
-            'body'       => trim($rawBody),
-            'stderr'     => $stderr,
-        );
-    }
-
-    /**
-     * Collect the response from a FastCGI request.
-     *
-     * @return String Return response.
-     */
-    public function response()
-    {
-        try {
-            return $this->doResponse();
-        } catch (CommunicationException $e) {
+            // Broken pipe, tear down so future requests might succeed
+            $e = CommunicationException::socketWrite($this->sock);
             $this->close();
             throw $e;
         }
+
+        $req = new Response($this, $id);
+        $req->state = Response::REQ_STATE_WRITTEN;
+        $this->_requests[$id] = $req;
+
+        return $req;
     }
 
     /**
-     * Collect the response from a FastCGI request.
+     * Blocking call that waits for response to specific request
      *
-     * @return String Return response.
+     * @param Integer $requestId
+     * @param Integer $timeoutMs [optional] the number of milliseconds to wait. Defaults to the ReadWriteTimeout value set.
+     * @return bool
+     * @throws CommunicationException
+     * @throws TimedOutException
      */
-    protected function doResponse()
+    public function wait_for_response($requestId, $timeoutMs = 0)
     {
-        $stdout = $stderr = '';
+        if (!isset($this->_requests[$requestId])) {
+            throw new CommunicationException('Invalid request id given');
+        }
 
-        while ($this->awaitingResponse) {
+        // Need to manually check since we might do several reads none of which timeout themselves
+        // but still not get the response requested
+        $startTime = microtime(true);
 
-            $resp = $this->readPacket();
-
-            // Check for the end of the response.
-            if ($resp['type'] == self::END_REQUEST || $resp['type'] == 0) {
-                $this->awaitingResponse = false;
-            // Check for response content.
-            } elseif ($resp['type'] == self::STDOUT) {
-                $stdout .= $resp['content'];
-            } elseif ($resp['type'] == self::STDERR) {
-                $stderr .= $resp['content'];
+        do {
+            $resp = $this->readPacket($timeoutMs);
+            if (!$resp) {
+                continue; // block again
             }
-        }
 
-        if (!is_array($resp)) {
-            throw new CommunicationException("Bad Request");
-        }
+            if (isset($this->_requests[$resp['requestId']])) {
+                $req = $this->_requests[$resp['requestId']];
+                $respType = (int) $resp['type'];
 
-        switch (ord($resp['content']{4})) {
-            case self::CANT_MPX_CONN:
-                throw new CommunicationException('This app can\'t multiplex [CANT_MPX_CONN]');
-                break;
-            case self::OVERLOADED:
-                throw new CommunicationException('New request rejected; too busy [OVERLOADED]');
-                break;
-            case self::UNKNOWN_ROLE:
-                throw new CommunicationException('Role value not known [UNKNOWN_ROLE]');
-                break;
-            case self::REQUEST_COMPLETE:
-                return static::formatResponse($stdout, $stderr);
-        }
-    }
+                if ($respType === self::STDOUT) {
+                    $req->stdout .= $resp['content'];
+                } elseif ($respType === self::STDERR) {
+                    $req->state = Response::REQ_STATE_ERR;
+                    $req->stderr .= $resp['content'];
+                } elseif ($respType === self::END_REQUEST) {
+                    $req->state = Response::REQ_STATE_OK;
+                    // Don't need to track this request anymore
+                    unset($this->_requests[$resp['requestId']]);
+                    if ($resp['requestId'] == $requestId) {
+                        return true;
+                    }
+                }
+            } else {
+                trigger_error("Bad requestID: " . $resp['requestId'], E_USER_WARNING);
+            }
 
-    public function __toString()
-    {
-        $type = $this->socketPath ? 'tcp' : 'unix';
-        if ($this->awaitingResponse) {
-            $status = 'waiting for response';
-        } elseif ($this->sock) {
-            $status = 'ready for request';
-        } else {
-            $status = 'not connected';
-        }
+            // Process special message
+            if (isset($resp['content']{4})) {
+                $msg = ord($resp['content']{4});
+                if ($msg === self::CANT_MPX_CONN) {
+                    throw new CommunicationException('This app can\'t multiplex [CANT_MPX_CONN]');
+                } elseif ($msg === self::OVERLOADED) {
+                    throw new CommunicationException('New request rejected; too busy [OVERLOADED]');
+                } elseif ($msg === self::UNKNOWN_ROLE) {
+                    throw new CommunicationException('Role value not known [UNKNOWN_ROLE]');
+                }
+            }
 
-        $address = $this->socketPath;
-        if (!$address) {
-            $address = "{$this->host}:{$this->port}";
-        }
+            if ($timeoutMs && microtime(true) - $startTime >= ($timeoutMs * 1000)) {
+                throw new TimedOutException('Timed out');
+            }
 
-        return "FCGIClient for $address : $status";
+        } while (true);
+
+        return false;
     }
 }

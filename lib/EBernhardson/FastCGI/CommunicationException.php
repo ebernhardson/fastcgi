@@ -67,3 +67,5 @@ class CommunicationException extends \RuntimeException
         return new self("The request was aborted.");
     }
 }
+
+class TimedOutException extends \Exception {}
