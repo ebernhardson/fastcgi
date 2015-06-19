@@ -100,6 +100,12 @@ class Client
     protected $_requests = array();
 
     /**
+     * Unsigned 16-bit integer incremented with each request to generate a unique ID.
+     * @var Integer
+     */
+    protected $_requestCounter = 0;
+
+    /**
      * Read/Write timeout in milliseconds
      * @var Integer
      */
@@ -177,7 +183,7 @@ class Client
     public function setReadWriteTimeout($timeoutMs)
     {
         $this->_readWriteTimeout = $timeoutMs;
-        $this->set_ms_timeout($this->_readWriteTimeout);
+        $this->setMsTimeout($this->_readWriteTimeout);
     }
 
     /**
@@ -196,7 +202,7 @@ class Client
      * @param Integer $timeoutMs millisecond timeout
      * @return Boolean
      */
-    private function set_ms_timeout($timeoutMs) {
+    private function setMsTimeout($timeoutMs) {
         if (!$this->sock) {
             return false;
         }
@@ -216,14 +222,14 @@ class Client
         if ($this->sock) {
             return;
         }
-        if (!$this->port) {
-            $this->sock = socket_create(AF_UNIX, SOCK_STREAM, 0);
-            $address = $this->host;
-            $port = 0;
-        } else {
+        if ($this->port) {
             $this->sock = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
             $address = $this->host;
             $port = $this->port;
+        } else {
+            $this->sock = socket_create(AF_UNIX, SOCK_STREAM, 0);
+            $address = $this->host;
+            $port = 0;
         }
         if (!$this->sock) {
             throw CommunicationException::socketCreate();
@@ -231,7 +237,7 @@ class Client
         if (false === socket_connect($this->sock, $address, $port)) {
             throw CommunicationException::socketConnect($this->sock, $this->host, $this->port);
         }
-        if ($this->_readWriteTimeout && !$this->set_ms_timeout($this->_readWriteTimeout)) {
+        if ($this->_readWriteTimeout && !$this->setMsTimeout($this->_readWriteTimeout)) {
             throw new CommunicationException('Unable to set timeout on socket');
         }
     }
@@ -354,9 +360,10 @@ class Client
     /**
      * Read a FastCGI Packet
      *
-     * @param int $timeoutMs
+     * @param Integer $timeoutMs
      * @return array|null
      * @throws CommunicationException
+     * @throws TimedOutException
      */
     protected function readPacket($timeoutMs)
     {
@@ -366,16 +373,14 @@ class Client
 
         $packet = socket_read($this->sock, self::HEADER_LEN);
         if ($packet === false) {
-            /* Not relevant for socket_create() connections
-            $info = stream_get_meta_data($this->_sock);
-
-            if ($info['timed_out']) {
-                throw new TimedOutException('Read timed out');
+            $errNo = socket_last_error($this->sock);
+            if ($errNo == 110) { // ETIMEDOUT from http://php.net/manual/en/function.socket-last-error.php
+                throw new TimedOutException('Failed reading socket');
             }
-
-            if ($info['unread_bytes'] == 0
-                && $info['blocked']
-                && $info['eof']) {
+            //TODO: Determine way to check if FPM is blocking the client
+            /* Not relevant for socket_create() but very interesting...
+            $info = stream_get_meta_data($this->_sock);
+            if ($info['unread_bytes'] == 0 && $info['blocked'] && $info['eof']) {
                 throw new CommunicationException('Not in white list. Check listen.allowed_clients.');
             }*/
             throw CommunicationException::socketRead($this->sock);
@@ -437,7 +442,7 @@ class Client
      */
     public function request(array $params, $stdin)
     {
-        $req = $this->async_request($params, $stdin);
+        $req = $this->asyncRequest($params, $stdin);
         return $req->get();
     }
 
@@ -455,13 +460,17 @@ class Client
      * @return Response
      * @throws CommunicationException
      */
-    public function async_request(array $params, $stdin)
+    public function asyncRequest(array $params, $stdin)
     {
         $this->connect();
 
-        // Pick random number between 1 and max 16 bit unsigned int 65535
+        // Ensure new requestID is not already being tracked
         do {
-            $id = mt_rand(1, (1 << 16) - 1);
+            $this->_requestCounter++;
+            if ($this->_requestCounter >= 65536 /* or (1 << 16) */) {
+                $this->_requestCounter = 1;
+            }
+            $id = $this->_requestCounter;
         } while (isset($this->_requests[$id]));
 
         $request = $this->buildPacket(self::BEGIN_REQUEST, chr(0) . chr(self::RESPONDER) . chr((int) $this->keepAlive) . str_repeat(chr(0), 5), $id);
@@ -481,16 +490,8 @@ class Client
         $request .= $this->buildPacket(self::STDIN, '', $id);
 
         if (false === socket_write($this->sock, $request)) {
-            /* Not relevant for socket_create()
-            $info = stream_get_meta_data($this->_sock);
-            if ($info['timed_out']) {
-                throw new TimedOutException('Write timed out');
-            }*/
-
-            // Broken pipe, tear down so future requests might succeed
-            $e = CommunicationException::socketWrite($this->sock);
-            $this->close();
-            throw $e;
+            // The developer may wish to close() and re-open the socket
+            throw CommunicationException::socketWrite($this->sock);
         }
 
         $req = new Response($this, $id);
@@ -504,12 +505,12 @@ class Client
      * Blocking call that waits for response to specific request
      *
      * @param Integer $requestId
-     * @param Integer $timeoutMs [optional] the number of milliseconds to wait. Defaults to the ReadWriteTimeout value set.
+     * @param Integer $timeoutMs [optional] the number of milliseconds to wait
      * @return bool
      * @throws CommunicationException
      * @throws TimedOutException
      */
-    public function wait_for_response($requestId, $timeoutMs = 0)
+    public function waitForResponse($requestId, $timeoutMs = 0)
     {
         if (!isset($this->_requests[$requestId])) {
             throw new CommunicationException('Invalid request id given');
@@ -543,6 +544,10 @@ class Client
                     }
                 }
             } else {
+                // This is NOT especially an error condition.
+                // Maybe there was a previous instance of this class that controlled the socket,
+                // or maybe the developer has extended things weirdly.
+                // We can't use the data, so we should log something.
                 trigger_error("Bad requestID: " . $resp['requestId'], E_USER_WARNING);
             }
 

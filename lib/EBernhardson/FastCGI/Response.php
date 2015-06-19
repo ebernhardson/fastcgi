@@ -29,21 +29,23 @@ class Response
     const REQ_STATE_ERR        = 3;
     const REQ_STATE_TIMED_OUT  = 4;
 
-    /** @var int */
+    /** @var Integer */
     public $state;
-    /** @var string */
+    /** @var String */
     public $stdout;
-    /** @var string */
+    /** @var String */
     public $stderr;
 
+    /** @var Integer */
     private $reqID;
+    /** @var array */
     private $resp;
     /** @var Client */
     private $conn;
 
     /**
      * @param Client $conn
-     * @param int    $reqID
+     * @param Integer $reqID
      */
     public function __construct(Client $conn, $reqID)
     {
@@ -52,7 +54,17 @@ class Response
     }
 
     /**
-     * @param int $timeout
+     * Retrieve the Request ID used to create this instance.
+     *
+     * @return Integer
+     */
+    public function getId()
+    {
+        return $this->reqID;
+    }
+
+    /**
+     * @param Integer $timeout
      * @return array
      */
     public function get($timeout = 0)
@@ -66,7 +78,7 @@ class Response
                 return $this->resp;
             }
 
-            $this->conn->wait_for_response($this->reqID, $timeout);
+            $this->conn->waitForResponse($this->reqID, $timeout);
             $this->resp = self::formatResponse($this->stdout, $this->stderr);
         }
         return $this->resp;
