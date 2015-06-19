@@ -44,7 +44,7 @@ class Response
     private $conn;
 
     /**
-     * @param Client $conn
+     * @param Client  $conn
      * @param Integer $reqID
      */
     public function __construct(Client $conn, $reqID)
@@ -87,71 +87,68 @@ class Response
     /**
      * Format the response into an array with separate statusCode, headers, body, and error output.
      *
-     * @param string $stdout The plain response.
-     * @param string $stderr The plain error output.
+     * @param String $stdout The plain response.
+     * @param String $stderr The plain error output.
      * @return array An array containing the headers and body content.
      */
     private static function formatResponse($stdout, $stderr)
     {
-        // Split the header from the body.  Split on \n\n.
-        $doubleCr = strpos($stdout, "\r\n\r\n");
-        $rawHeader = substr($stdout, 0, $doubleCr);
-        $rawBody = substr($stdout, $doubleCr, strlen($stdout));
+        $code     = 200;
+        $headers  = [
+            // An empty status means 200 OK, so initialize with defaults
+            'status' => '200 OK',
+        ];
 
-        // Format the header.
-        $header = array();
-        $headerLines = explode("\n", $rawHeader);
+        // HTTP uses 2 CR/NL's to separate body from header
+        $boundary = strpos($stdout, "\r\n\r\n");
+        if (false !== $boundary) {
 
-        // Initialize the status code and the status header
-        $code = '200';
-        $headerStatus = '200 OK';
+            // Split the header from the body
+            $rawHead = substr($stdout, 0, $boundary);
+            $stdout = substr($stdout, $boundary + 4);
 
-        // Iterate over the headers found in the response.
-        foreach ($headerLines as $line) {
+            // Iterate over the found headers
+            $headerLines = explode("\n", $rawHead);
+            foreach ($headerLines as $line) {
 
-            // Extract the header data.
-            if (preg_match('/([\w-]+):\s*(.*)$/', $line, $matches)) {
+                // Extract the header data
+                if (preg_match('/([\w-]+):\s*(.*)$/', $line, $matches)) {
 
-                // Initialize header name/value.
-                $headerName = strtolower($matches[1]);
-                $headerValue = trim($matches[2]);
+                    // Normalize header name/value
+                    $headerName  = strtolower($matches[1]);
+                    $headerValue = trim($matches[2]);
 
-                // If we found an status header (will only be available if not have a 200).
-                if ($headerName == 'status') {
+                    // HTTP Status (will frequently only be found non-200)
+                    if ($headerName === 'status') {
+                        $headers['status'] = $headerValue;
 
-                    // Initialize the status header and the code.
-                    $headerStatus = $headerValue;
-                    $code = $headerValue;
-                    if (false !== ($pos = strpos($code, ' '))) {
-                        $code = substr($code, 0, $pos);
+                        // Extract the number from the rest of the message
+                        $pos  = strpos($headerValue, ' ') ;
+                        $code = $pos > 0
+                            ? (int) substr($headerValue, 0, $pos)
+                            : (int) $headerValue;
+
+                        // Skip re-setting
+                        continue;
                     }
-                }
 
-                // We need to know if this header is already available
-                if (array_key_exists($headerName, $header)) {
-
-                    // Check if the value is an array already
-                    if (is_array($header[$headerName])) {
-                        // Simply append the next header value
-                        $header[$headerName][] = $headerValue;
+                    if (array_key_exists($headerName, $headers)) {
+                        // Ensure is array
+                        if (!is_array($headers[$headerName])) {
+                            $headers[$headerName] = [ $headers[$headerName] ];
+                        }
+                        $headers[$headerName][] = $headerValue;
                     } else {
-                        // Convert the existing value into an array and append the new header value
-                        $header[$headerName] = array($header[$headerName], $headerValue);
+                        $headers[$headerName] = $headerValue;
                     }
-
-                } else {
-                    $header[$headerName] = $headerValue;
                 }
             }
         }
 
-        // Set the status header finally
-        $header['status'] = $headerStatus;
-
         return array(
-            'statusCode' => (int) $code,
-            'headers'    => $header,
-            'body'       => trim($rawBody),
+            'statusCode' => $code,
+            'headers'    => $headers,
+            'body'       => $stdout,
             'stderr'     => $stderr,
         );
     }
