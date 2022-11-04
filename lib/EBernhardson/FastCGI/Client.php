@@ -318,19 +318,19 @@ class Client
         $array = array();
         $p = 0;
         while ($p != $length) {
-            $nlen = ord($data{$p++});
+            $nlen = ord($data[$p++]);
             if ($nlen >= 128) {
                 $nlen = ($nlen & 0x7F << 24);
-                $nlen |= (ord($data{$p++}) << 16);
-                $nlen |= (ord($data{$p++}) << 8);
-                $nlen |= (ord($data{$p++}));
+                $nlen |= (ord($data[$p++]) << 16);
+                $nlen |= (ord($data[$p++]) << 8);
+                $nlen |= (ord($data[$p++]));
             }
-            $vlen = ord($data{$p++});
+            $vlen = ord($data[$p++]);
             if ($vlen >= 128) {
                 $vlen = ($nlen & 0x7F << 24);
-                $vlen |= (ord($data{$p++}) << 16);
-                $vlen |= (ord($data{$p++}) << 8);
-                $vlen |= (ord($data{$p++}));
+                $vlen |= (ord($data[$p++]) << 16);
+                $vlen |= (ord($data[$p++]) << 8);
+                $vlen |= (ord($data[$p++]));
             }
             $array[substr($data, $p, $nlen)] = substr($data, $p+$nlen, $vlen);
             $p += ($nlen + $vlen);
@@ -348,12 +348,12 @@ class Client
     protected function decodePacketHeader($data)
     {
         $ret = array();
-        $ret['version']       = ord($data{0});
-        $ret['type']          = ord($data{1});
-        $ret['requestId']     = (ord($data{2}) << 8) + ord($data{3});
-        $ret['contentLength'] = (ord($data{4}) << 8) + ord($data{5});
-        $ret['paddingLength'] = ord($data{6});
-        $ret['reserved']      = ord($data{7});
+        $ret['version']       = ord($data[0]);
+        $ret['type']          = ord($data[1]);
+        $ret['requestId']     = (ord($data[2]) << 8) + ord($data[3]);
+        $ret['contentLength'] = (ord($data[4]) << 8) + ord($data[5]);
+        $ret['paddingLength'] = ord($data[6]);
+        $ret['reserved']      = ord($data[7]);
         return $ret;
     }
 
@@ -552,8 +552,8 @@ class Client
             }
 
             // Process special message
-            if (isset($resp['content']{4})) {
-                $msg = ord($resp['content']{4});
+            if (isset($resp['content'][4])) {
+                $msg = ord($resp['content'][4]);
                 if ($msg === self::CANT_MPX_CONN) {
                     throw new CommunicationException('This app can\'t multiplex [CANT_MPX_CONN]');
                 } elseif ($msg === self::OVERLOADED) {
